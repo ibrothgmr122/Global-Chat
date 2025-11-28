@@ -1,789 +1,348 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="color-scheme" content="dark" />
-  <title>SnapGroup — One Global Chat</title>
-
-  <!-- Tailwind (required) -->
-  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-
-  <!-- GUN (serverless realtime database / pubsub) -->
-  <script src="https://cdn.jsdelivr.net/npm/gun/gun.js"></script>
-
-  <style>
-    /* Small polish beyond Tailwind */
-    :root {
-      --snap-yellow: #fffc00;
-      --bg: #0b0b10;
-    }
-
-    html, body { height: 100%; }
-
-    /* Optional: smoother scrolling on mobile */
-    #chatView { -webkit-overflow-scrolling: touch; }
-
-    /* Better scrollbar (desktop) */
-    #chatView::-webkit-scrollbar { width: 10px; }
-    #chatView::-webkit-scrollbar-track { background: rgba(255,255,255,0.06); }
-    #chatView::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 999px; }
-
-    /* Prevent iOS zoom on input focus */
-    input, textarea, button { font-size: 16px; }
-
-    /* Subtle noise backdrop */
-    .noise {
-      background-image:
-        radial-gradient(circle at 1px 1px, rgba(255,255,255,0.08) 1px, transparent 0);
-      background-size: 18px 18px;
-      opacity: 0.14;
-      mix-blend-mode: overlay;
-      pointer-events: none;
-    }
-  </style>
-</head>
-
-<body class="bg-[var(--bg)] text-white">
-  <div class="fixed inset-0 -z-10">
-    <div class="absolute inset-0 bg-[radial-gradient(1200px_600px_at_50%_-10%,rgba(255,252,0,0.28),transparent_55%),radial-gradient(900px_420px_at_0%_30%,rgba(139,92,246,0.18),transparent_55%),radial-gradient(900px_420px_at_100%_40%,rgba(59,130,246,0.16),transparent_55%)]"></div>
-    <div class="absolute inset-0 noise"></div>
-  </div>
-
-  <div id="app" class="min-h-screen flex flex-col">
-    <!-- Header -->
-    <header class="sticky top-0 z-20 border-b border-white/10 bg-black/35 backdrop-blur-md">
-      <div class="mx-auto max-w-3xl px-4 py-3 flex items-center justify-between gap-3">
-        <div class="flex items-center gap-3 min-w-0">
-          <div class="h-10 w-10 rounded-2xl bg-[var(--snap-yellow)] text-black grid place-items-center shadow-sm shadow-black/40">
-            <svg viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M12 3a5 5 0 0 0-5 5v3a5 5 0 0 0 10 0V8a5 5 0 0 0-5-5Z" />
-              <path d="M7 11v2a5 5 0 0 0 10 0v-2" />
-              <path d="M8 19c1.6 0 2.4-1 4-1s2.4 1 4 1" />
-            </svg>
-          </div>
-          <div class="min-w-0">
-            <div class="flex items-center gap-2">
-              <h1 class="font-semibold tracking-tight text-white leading-tight truncate">SnapGroup</h1>
-              <span class="text-[11px] px-2 py-0.5 rounded-full bg-white/10 border border-white/10 text-white/80">one room</span>
-            </div>
-            <div class="flex items-center gap-2 text-xs text-white/70">
-              <span id="meLabel" class="truncate">…</span>
-              <span class="text-white/25">•</span>
-              <span class="inline-flex items-center gap-1">
-                <span id="connDot" class="h-2 w-2 rounded-full bg-white/30"></span>
-                <span id="connText">Connecting…</span>
-              </span>
-              <span class="text-white/25">•</span>
-              <span><span id="onlineCount">0</span> online</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="flex items-center gap-2">
-          <button id="changeNameBtn" class="hidden sm:inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm hover:bg-white/10 active:scale-[0.99]">
-            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M12 20h9" />
-              <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
-            </svg>
-            Name
-          </button>
-          <button id="infoBtn" class="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-3 py-2 hover:bg-white/10 active:scale-[0.99]" aria-label="About">
-            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="10" />
-              <path d="M12 16v-4" />
-              <path d="M12 8h.01" />
-            </svg>
-          </button>
-        </div>
-      </div>
-    </header>
-
-    <!-- Chat -->
-    <main class="flex-1">
-      <div class="mx-auto max-w-3xl h-[calc(100vh-64px-92px)] sm:h-[calc(100vh-64px-84px)]">
-        <div id="chatView" class="h-full overflow-y-auto px-4 py-4">
-          <div class="mb-3 rounded-2xl border border-white/10 bg-black/30 p-4">
-            <div class="flex items-start gap-3">
-              <div class="mt-0.5 h-9 w-9 shrink-0 rounded-xl bg-[var(--snap-yellow)]/95 text-black grid place-items-center">
-                <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M21 15a4 4 0 0 1-4 4H7l-4 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
-                </svg>
-              </div>
-              <div class="min-w-0">
-                <div class="font-semibold">Everyone is in the same group</div>
-                <div class="text-sm text-white/70 mt-1">
-                  Anyone who opens this page joins the global chat instantly. This is a public room — don’t share personal info.
-                </div>
-                <div class="text-xs text-white/60 mt-2">Tip: Press <span class="px-1.5 py-0.5 rounded bg-white/10 border border-white/10">Enter</span> to send, <span class="px-1.5 py-0.5 rounded bg-white/10 border border-white/10">Shift+Enter</span> for a new line.</div>
-              </div>
-            </div>
-          </div>
-
-          <div id="messageList" class="space-y-2"></div>
-          <div id="scrollAnchor" class="h-6"></div>
-        </div>
-      </div>
-    </main>
-
-    <!-- Composer -->
-    <footer class="sticky bottom-0 z-20 border-t border-white/10 bg-black/40 backdrop-blur-md">
-      <div class="mx-auto max-w-3xl px-4 py-3">
-        <div id="typingLine" class="mb-2 text-xs text-white/60 hidden"></div>
-
-        <div class="flex items-end gap-2">
-          <button id="cameraBtn" class="h-11 w-11 shrink-0 rounded-2xl bg-[var(--snap-yellow)] text-black grid place-items-center shadow-sm shadow-black/40 hover:brightness-[0.98] active:scale-[0.99]" aria-label="Camera">
-            <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h3l2-2h8l2 2h3a2 2 0 0 1 2 2z" />
-              <circle cx="12" cy="13" r="4" />
-            </svg>
-          </button>
-
-          <div class="flex-1 rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-            <textarea id="messageInput" rows="1" placeholder="Send a snap to everyone…" class="w-full resize-none bg-transparent outline-none text-[15px] leading-5 placeholder:text-white/40"></textarea>
-            <div class="mt-1 flex items-center justify-between text-[11px] text-white/40">
-              <span id="charHint">0/500</span>
-              <button id="changeNameBtnMobile" class="sm:hidden inline-flex items-center gap-1.5 hover:text-white/70">
-                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M12 20h9" />
-                  <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
-                </svg>
-                Change name
-              </button>
-            </div>
-          </div>
-
-          <button id="sendBtn" class="h-11 px-4 rounded-2xl bg-white text-black font-semibold hover:bg-white/90 active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed" disabled>
-            Send
-          </button>
-        </div>
-      </div>
-    </footer>
-  </div>
-
-  <!-- Name Modal -->
-  <div id="nameModal" class="fixed inset-0 z-50 hidden">
-    <div class="absolute inset-0 bg-black/70"></div>
-    <div class="absolute inset-0 grid place-items-center p-4">
-      <div class="w-full max-w-md rounded-3xl border border-white/10 bg-black/60 backdrop-blur-xl p-5 shadow-2xl shadow-black/60">
-        <div class="flex items-start gap-3">
-          <div class="h-11 w-11 rounded-2xl bg-[var(--snap-yellow)] text-black grid place-items-center">
-            <svg viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M12 3a5 5 0 0 0-5 5v3a5 5 0 0 0 10 0V8a5 5 0 0 0-5-5Z" />
-              <path d="M7 11v2a5 5 0 0 0 10 0v-2" />
-              <path d="M8 19c1.6 0 2.4-1 4-1s2.4 1 4 1" />
-            </svg>
-          </div>
-          <div class="min-w-0">
-            <h2 class="text-lg font-semibold">Pick a name</h2>
-            <p class="text-sm text-white/70 mt-1">This name shows up on your messages in the global group chat.</p>
-          </div>
-        </div>
-
-        <div class="mt-4">
-          <label class="text-xs text-white/60">Display name</label>
-          <input id="nameInput" type="text" class="mt-1 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 outline-none focus:border-white/25" autocomplete="nickname" maxlength="24" />
-          <div class="mt-2 text-xs text-white/50">Max 24 characters. No accounts needed.</div>
-        </div>
-
-        <div class="mt-5 flex items-center justify-between gap-3">
-          <button id="randomNameBtn" class="rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm hover:bg-white/10">Random</button>
-          <button id="saveNameBtn" class="rounded-2xl bg-[var(--snap-yellow)] text-black font-semibold px-4 py-2.5 text-sm hover:brightness-[0.98]">Join chat</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- About Modal -->
-  <div id="aboutModal" class="fixed inset-0 z-50 hidden">
-    <div class="absolute inset-0 bg-black/70"></div>
-    <div class="absolute inset-0 grid place-items-center p-4">
-      <div class="w-full max-w-lg rounded-3xl border border-white/10 bg-black/60 backdrop-blur-xl p-5 shadow-2xl shadow-black/60">
-        <div class="flex items-center justify-between gap-3">
-          <h3 class="text-lg font-semibold">About</h3>
-          <button id="closeAboutBtn" class="rounded-xl border border-white/10 bg-white/5 px-3 py-2 hover:bg-white/10" aria-label="Close">
-            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M18 6 6 18" />
-              <path d="m6 6 12 12" />
-            </svg>
-          </button>
-        </div>
-
-        <div class="mt-3 space-y-3 text-sm text-white/75">
-          <p>
-            <span class="font-semibold text-white">SnapGroup</span> is a one-room chat that updates in real time using <span class="font-semibold">GUN</span>
-            (a peer-to-peer / relay-based realtime database). It’s designed to work as a single static HTML file.
-          </p>
-          <p class="text-white/70">If the public relay is unreachable, the chat may fall back to local-only mode for your device.</p>
-          <p class="text-white/70">This room is public. Don’t post secrets.</p>
-        </div>
-
-        <div class="mt-5 flex justify-end">
-          <button id="closeAboutBtn2" class="rounded-2xl bg-white text-black font-semibold px-4 py-2.5 text-sm hover:bg-white/90">Got it</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Toasts -->
-  <div id="toastHost" class="fixed bottom-4 left-1/2 -translate-x-1/2 z-[60] w-[min(92vw,520px)] space-y-2"></div>
-
-  <script>
-    (function () {
-      const ROOM_KEY = 'snapgroup_global_v1';
-      const MAX_CHARS = 500;
-      const MAX_RENDER = 250;
-      const MESSAGE_HIDE_AFTER_MS = 48 * 60 * 60 * 1000; // hide very old messages in UI only
-      const PRESENCE_STALE_MS = 22_000;
-      const HEARTBEAT_MS = 8_000;
-
-      const $ = (id) => document.getElementById(id);
-
-      const els = {
-        meLabel: $('meLabel'),
-        connDot: $('connDot'),
-        connText: $('connText'),
-        onlineCount: $('onlineCount'),
-        chatView: $('chatView'),
-        messageList: $('messageList'),
-        scrollAnchor: $('scrollAnchor'),
-        typingLine: $('typingLine'),
-        messageInput: $('messageInput'),
-        charHint: $('charHint'),
-        sendBtn: $('sendBtn'),
-        cameraBtn: $('cameraBtn'),
-        infoBtn: $('infoBtn'),
-        aboutModal: $('aboutModal'),
-        closeAboutBtn: $('closeAboutBtn'),
-        closeAboutBtn2: $('closeAboutBtn2'),
-        nameModal: $('nameModal'),
-        nameInput: $('nameInput'),
-        saveNameBtn: $('saveNameBtn'),
-        randomNameBtn: $('randomNameBtn'),
-        changeNameBtn: $('changeNameBtn'),
-        changeNameBtnMobile: $('changeNameBtnMobile'),
-        toastHost: $('toastHost'),
-      };
-
-      const state = {
-        userId: loadOrMakeUserId(),
-        name: loadName(),
-        gun: null,
-        room: null,
-        messages: null,
-        presence: null,
-        beatTimer: null,
-        typeOffTimer: null,
-        lastSendAt: 0,
-        typing: false,
-        peersUp: new Set(),
-        messageMap: new Map(),
-        presenceMap: new Map(),
-        renderQueued: false,
-      };
-
-      function loadOrMakeUserId() {
-        const k = 'snapgroup_user_id';
-        let id = localStorage.getItem(k);
-        if (!id) {
-          id = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ('u_' + Math.random().toString(16).slice(2) + Date.now().toString(16));
-          localStorage.setItem(k, id);
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Global Chat - Snapchat Style</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
         }
-        return id;
-      }
-
-      function loadName() {
-        return (localStorage.getItem('snapgroup_name') || '').trim();
-      }
-
-      function saveName(name) {
-        localStorage.setItem('snapgroup_name', name);
-      }
-
-      function randomName() {
-        const animals = ['Ghost', 'Snap', 'Pixel', 'Night', 'Solar', 'Nova', 'Comet', 'Echo', 'Vibe', 'Orbit', 'Drift', 'Pulse', 'Neon', 'Frost', 'Cinder'];
-        const a = animals[Math.floor(Math.random() * animals.length)];
-        const n = Math.floor(1000 + Math.random() * 9000);
-        return `${a}${n}`;
-      }
-
-      function toast(message, kind = 'info') {
-        const colors = {
-          info: 'border-white/10 bg-black/60 text-white',
-          ok: 'border-emerald-400/20 bg-emerald-500/10 text-emerald-50',
-          warn: 'border-amber-400/20 bg-amber-500/10 text-amber-50',
-          err: 'border-rose-400/20 bg-rose-500/10 text-rose-50',
-        };
-        const div = document.createElement('div');
-        div.className = `rounded-2xl border ${colors[kind] || colors.info} backdrop-blur-xl px-4 py-3 shadow-lg shadow-black/40`;
-        div.textContent = message;
-        els.toastHost.appendChild(div);
-        setTimeout(() => {
-          div.style.opacity = '0';
-          div.style.transform = 'translateY(6px)';
-          div.style.transition = 'opacity 180ms ease, transform 180ms ease';
-        }, 2400);
-        setTimeout(() => div.remove(), 2750);
-      }
-
-      function setConnUI(mode) {
-        // mode: 'connecting' | 'online' | 'local'
-        if (mode === 'online') {
-          els.connDot.className = 'h-2 w-2 rounded-full bg-emerald-400';
-          els.connText.textContent = 'Live';
-        } else if (mode === 'local') {
-          els.connDot.className = 'h-2 w-2 rounded-full bg-amber-300';
-          els.connText.textContent = 'Local';
-        } else {
-          els.connDot.className = 'h-2 w-2 rounded-full bg-white/30';
-          els.connText.textContent = 'Connecting…';
+        
+        .message-bubble {
+            animation: slideIn 0.3s ease-out;
         }
-      }
-
-      function fmtTime(ts) {
-        try {
-          return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        } catch {
-          return '';
-        }
-      }
-
-      function sanitizeName(name) {
-        return name.replace(/\s+/g, ' ').trim().slice(0, 24);
-      }
-
-      function sanitizeText(text) {
-        // Keep newlines but trim ends
-        return text.replace(/\r/g, '').trim().slice(0, MAX_CHARS);
-      }
-
-      function nearBottom() {
-        const el = els.chatView;
-        const pad = 120;
-        return (el.scrollHeight - (el.scrollTop + el.clientHeight)) < pad;
-      }
-
-      function scrollToBottom(behavior = 'auto') {
-        els.scrollAnchor.scrollIntoView({ block: 'end', behavior });
-      }
-
-      function queueRender() {
-        if (state.renderQueued) return;
-        state.renderQueued = true;
-        requestAnimationFrame(() => {
-          state.renderQueued = false;
-          renderMessages();
-        });
-      }
-
-      function renderMessages() {
-        const stick = nearBottom();
-        const now = Date.now();
-        const items = [];
-
-        for (const [id, m] of state.messageMap.entries()) {
-          if (!m || typeof m !== 'object') continue;
-          if (!m.text || !m.t) continue;
-          if (now - m.t > MESSAGE_HIDE_AFTER_MS) continue;
-          items.push({ id, ...m });
-        }
-
-        items.sort((a, b) => (a.t || 0) - (b.t || 0));
-        const slice = items.slice(-MAX_RENDER);
-
-        els.messageList.textContent = '';
-        const frag = document.createDocumentFragment();
-
-        let lastDayKey = '';
-
-        for (const m of slice) {
-          const d = new Date(m.t);
-          const dayKey = d.toDateString();
-          if (dayKey !== lastDayKey) {
-            lastDayKey = dayKey;
-            const sep = document.createElement('div');
-            sep.className = 'flex items-center gap-3 my-4';
-            sep.innerHTML = `
-              <div class="h-px bg-white/10 flex-1"></div>
-              <div class="text-[11px] text-white/50">${escapeHtml(d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }))}</div>
-              <div class="h-px bg-white/10 flex-1"></div>
-            `;
-            frag.appendChild(sep);
-          }
-
-          const mine = m.from === state.userId;
-
-          const row = document.createElement('div');
-          row.className = `w-full flex ${mine ? 'justify-end' : 'justify-start'}`;
-
-          const bubble = document.createElement('button');
-          bubble.type = 'button';
-          bubble.className = `max-w-[92%] sm:max-w-[78%] text-left rounded-3xl px-4 py-3 border shadow-sm shadow-black/30 active:scale-[0.995] ${
-            mine
-              ? 'bg-[var(--snap-yellow)] text-black border-black/10'
-              : 'bg-white/7 text-white border-white/10'
-          }`;
-
-          bubble.addEventListener('click', async () => {
-            try {
-              const copy = `${m.name || 'Someone'}: ${m.text}`;
-              await navigator.clipboard.writeText(copy);
-              toast('Copied message', 'ok');
-            } catch {
-              toast('Copy not available in this browser', 'warn');
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
             }
-          });
-
-          const top = document.createElement('div');
-          top.className = `flex items-baseline gap-2 ${mine ? 'justify-end' : 'justify-start'}`;
-
-          const name = document.createElement('div');
-          name.className = `text-[11px] ${mine ? 'text-black/70' : 'text-white/70'} font-semibold truncate`;
-          name.textContent = mine ? 'You' : (m.name || 'Anonymous');
-
-          const time = document.createElement('div');
-          time.className = `text-[10px] ${mine ? 'text-black/55' : 'text-white/45'} shrink-0`;
-          time.textContent = fmtTime(m.t);
-
-          top.appendChild(name);
-          top.appendChild(time);
-
-          const body = document.createElement('div');
-          body.className = `mt-1 whitespace-pre-wrap break-words text-[15px] leading-5 ${mine ? 'text-black' : 'text-white'}`;
-          body.textContent = m.text;
-
-          bubble.appendChild(top);
-          bubble.appendChild(body);
-
-          row.appendChild(bubble);
-          frag.appendChild(row);
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
-
-        els.messageList.appendChild(frag);
-
-        if (stick) scrollToBottom('auto');
-      }
-
-      function escapeHtml(s) {
-        return String(s)
-          .replaceAll('&', '&amp;')
-          .replaceAll('<', '&lt;')
-          .replaceAll('>', '&gt;')
-          .replaceAll('"', '&quot;')
-          .replaceAll("'", '&#039;');
-      }
-
-      function updateOnlineUI() {
-        const now = Date.now();
-        const online = [];
-        for (const [id, p] of state.presenceMap.entries()) {
-          if (!p || typeof p !== 'object') continue;
-          if (!p.last) continue;
-          if ((now - p.last) > PRESENCE_STALE_MS) continue;
-          online.push({ id, ...p });
+        
+        .snap-shadow {
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
         }
-        els.onlineCount.textContent = String(online.length);
-
-        const typing = online
-          .filter(u => u.id !== state.userId)
-          .filter(u => !!u.typing && (now - u.last) < 8_000)
-          .map(u => u.name)
-          .filter(Boolean)
-          .slice(0, 3);
-
-        if (typing.length) {
-          els.typingLine.classList.remove('hidden');
-          const msg = typing.length === 1
-            ? `${typing[0]} is typing…`
-            : typing.length === 2
-              ? `${typing[0]} and ${typing[1]} are typing…`
-              : `${typing[0]}, ${typing[1]}, and others are typing…`;
-          els.typingLine.textContent = msg;
-        } else {
-          els.typingLine.classList.add('hidden');
-          els.typingLine.textContent = '';
+        
+        .chat-input {
+            background: rgba(255, 255, 255, 0.95);
         }
-      }
-
-      function openNameModal(prefill = '') {
-        els.nameModal.classList.remove('hidden');
-        els.nameInput.value = prefill || state.name || randomName();
-        setTimeout(() => els.nameInput.focus(), 50);
-      }
-
-      function closeNameModal() {
-        els.nameModal.classList.add('hidden');
-      }
-
-      function openAbout() {
-        els.aboutModal.classList.remove('hidden');
-      }
-
-      function closeAbout() {
-        els.aboutModal.classList.add('hidden');
-      }
-
-      function updateMeLabel() {
-        els.meLabel.textContent = state.name ? `@${state.name}` : '@…';
-      }
-
-      function updateComposerUI() {
-        const raw = els.messageInput.value || '';
-        const len = raw.replace(/\r/g, '').length;
-        els.charHint.textContent = `${Math.min(len, MAX_CHARS)}/${MAX_CHARS}`;
-
-        if (len > MAX_CHARS) {
-          els.charHint.className = 'text-[11px] text-rose-300';
-        } else {
-          els.charHint.className = 'text-[11px] text-white/40';
+        
+        .typing-indicator {
+            display: inline-block;
+            animation: pulse 1.5s ease-in-out infinite;
         }
-
-        const ok = sanitizeText(raw).length > 0 && len <= MAX_CHARS && !!state.name;
-        els.sendBtn.disabled = !ok;
-      }
-
-      function autosizeTextarea() {
-        const ta = els.messageInput;
-        ta.style.height = 'auto';
-        const max = 140; // px
-        ta.style.height = Math.min(ta.scrollHeight, max) + 'px';
-      }
-
-      function setTyping(on) {
-        state.typing = !!on;
-        // Update immediately but throttle via presence heartbeat too.
-        if (state.presence) {
-          state.presence.get(state.userId).put({ name: state.name, last: Date.now(), typing: state.typing });
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 1; }
         }
-      }
+    </style>
+</head>
+<body class="h-screen overflow-hidden">
+    <!-- Login Screen -->
+    <div id="loginScreen" class="flex items-center justify-center h-full">
+        <div class="bg-white rounded-3xl p-8 snap-shadow max-w-md w-full mx-4">
+            <div class="text-center mb-8">
+                <svg class="w-20 h-20 mx-auto mb-4 text-yellow-400" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/>
+                </svg>
+                <h1 class="text-4xl font-bold text-gray-800 mb-2">Global Chat</h1>
+                <p class="text-gray-600">Join the worldwide conversation</p>
+            </div>
+            
+            <div>
+                <input 
+                    type="text" 
+                    id="nameInput" 
+                    placeholder="Enter your name"
+                    maxlength="20"
+                    class="w-full px-4 py-3 rounded-full border-2 border-gray-300 focus:border-purple-500 focus:outline-none text-center text-lg mb-4"
+                    onkeypress="if(event.key === 'Enter') joinChat()"
+                />
+                <button 
+                    onclick="joinChat()"
+                    class="w-full bg-gradient-to-r from-purple-500 to-pink-500 text-white py-3 rounded-full font-semibold text-lg hover:shadow-lg transition-shadow"
+                >
+                    Join Chat 🚀
+                </button>
+            </div>
+            
+            <div class="mt-6 text-center">
+                <p class="text-sm text-gray-500" id="onlineCount">0 people online</p>
+            </div>
+        </div>
+    </div>
 
-      function setupGun() {
-        setConnUI('connecting');
+    <!-- Chat Screen -->
+    <div id="chatScreen" class="hidden flex flex-col h-full">
+        <!-- Header -->
+        <div class="bg-white snap-shadow px-6 py-4 flex items-center justify-between">
+            <div>
+                <h2 class="text-xl font-bold text-gray-800">Global Chat 🌍</h2>
+                <p class="text-sm text-gray-600" id="onlineUsers">0 people chatting</p>
+            </div>
+            <div>
+                <span class="text-sm font-semibold text-purple-600 bg-purple-100 px-4 py-2 rounded-full" id="currentUser"></span>
+            </div>
+        </div>
 
-        const peers = [
-          'https://gun-manhattan.herokuapp.com/gun',
-          'https://gun-us.herokuapp.com/gun',
-          'https://gun-eu.herokuapp.com/gun'
+        <!-- Messages Container -->
+        <div id="messagesContainer" class="flex-1 overflow-y-auto p-4 space-y-3">
+            <!-- Messages will appear here -->
+        </div>
+
+        <!-- Typing Indicator -->
+        <div id="typingIndicator" class="px-6 text-sm text-white opacity-75 hidden">
+            <span class="typing-indicator">Someone is typing...</span>
+        </div>
+
+        <!-- Input Area -->
+        <div class="chat-input p-4 snap-shadow">
+            <div class="flex items-center gap-2 max-w-4xl mx-auto">
+                <input 
+                    type="text" 
+                    id="messageInput" 
+                    placeholder="Type a message..."
+                    class="flex-1 px-4 py-3 rounded-full border-2 border-gray-300 focus:border-purple-500 focus:outline-none"
+                    onkeypress="if(event.key === 'Enter') sendMessage()"
+                    oninput="handleTyping()"
+                />
+                <button 
+                    onclick="sendMessage()"
+                    class="bg-gradient-to-r from-purple-500 to-pink-500 text-white p-3 rounded-full hover:shadow-lg transition-shadow"
+                >
+                    <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let userName = '';
+        let messages = [];
+        let users = new Set();
+        let typingTimeout;
+        let isTyping = false;
+
+        // Color palette for user avatars
+        const colors = [
+            'bg-red-500', 'bg-blue-500', 'bg-green-500', 'bg-yellow-500',
+            'bg-purple-500', 'bg-pink-500', 'bg-indigo-500', 'bg-teal-500',
+            'bg-orange-500', 'bg-cyan-500'
         ];
 
-        state.gun = Gun({ peers });
-        state.room = state.gun.get(ROOM_KEY);
-        state.messages = state.room.get('messages');
-        state.presence = state.room.get('presence');
-
-        // Connection hints (best-effort; relay availability varies)
-        try {
-          state.gun.on('hi', (peer) => {
-            const key = (peer && (peer.url || peer.id)) ? String(peer.url || peer.id) : 'peer';
-            state.peersUp.add(key);
-            setConnUI('online');
-          });
-          state.gun.on('bye', (peer) => {
-            const key = (peer && (peer.url || peer.id)) ? String(peer.url || peer.id) : 'peer';
-            state.peersUp.delete(key);
-            if (state.peersUp.size === 0) setConnUI('local');
-          });
-        } catch {
-          // Ignore
-        }
-
-        window.addEventListener('online', () => {
-          if (state.peersUp.size > 0) setConnUI('online');
-        });
-        window.addEventListener('offline', () => {
-          setConnUI('local');
-        });
-
-        // Realtime messages
-        state.messages.map().on((m, id) => {
-          if (!m || typeof m !== 'object') return;
-          // Avoid rendering tombstones/partials
-          if (!m.text || !m.t) return;
-          state.messageMap.set(id, normalizeMessage(m));
-          queueRender();
-        });
-
-        // Presence
-        state.presence.map().on((p, id) => {
-          if (!id) return;
-          if (p === null) return;
-          if (typeof p !== 'object') return;
-          state.presenceMap.set(id, p);
-          updateOnlineUI();
-        });
-
-        // Heartbeat
-        if (state.beatTimer) clearInterval(state.beatTimer);
-        const beat = () => {
-          if (!state.presence) return;
-          state.presence.get(state.userId).put({
-            name: state.name,
-            last: Date.now(),
-            typing: state.typing
-          });
-        };
-        beat();
-        state.beatTimer = setInterval(beat, HEARTBEAT_MS);
-
-        // Cleanup old messages in memory occasionally
-        setInterval(() => {
-          const now = Date.now();
-          let changed = false;
-          for (const [id, m] of state.messageMap.entries()) {
-            if (!m?.t) continue;
-            if ((now - m.t) > MESSAGE_HIDE_AFTER_MS) {
-              state.messageMap.delete(id);
-              changed = true;
+        function getUserColor(name) {
+            let hash = 0;
+            for (let i = 0; i < name.length; i++) {
+                hash = name.charCodeAt(i) + ((hash << 5) - hash);
             }
-          }
-          if (changed) queueRender();
-        }, 60_000);
-
-        // Kick render at start
-        queueRender();
-      }
-
-      function normalizeMessage(m) {
-        return {
-          from: String(m.from || ''),
-          name: String(m.name || 'Anonymous').slice(0, 24),
-          text: String(m.text || '').slice(0, MAX_CHARS),
-          t: Number(m.t || 0),
-          v: Number(m.v || 1)
-        };
-      }
-
-      function sendMessage() {
-        if (!state.messages) return;
-
-        const now = Date.now();
-        if (now - state.lastSendAt < 350) return; // tiny spam guard
-
-        const text = sanitizeText(els.messageInput.value || '');
-        if (!text) return;
-
-        const msg = {
-          from: state.userId,
-          name: state.name,
-          text,
-          t: Date.now(),
-          v: 1
-        };
-
-        state.lastSendAt = now;
-        state.messages.set(msg);
-
-        els.messageInput.value = '';
-        autosizeTextarea();
-        updateComposerUI();
-        setTyping(false);
-        scrollToBottom('smooth');
-      }
-
-      // UI events
-      els.randomNameBtn.addEventListener('click', () => {
-        els.nameInput.value = randomName();
-        els.nameInput.focus();
-      });
-
-      els.saveNameBtn.addEventListener('click', () => {
-        const name = sanitizeName(els.nameInput.value || '');
-        if (!name) {
-          toast('Please enter a name', 'warn');
-          els.nameInput.focus();
-          return;
+            return colors[Math.abs(hash) % colors.length];
         }
-        state.name = name;
-        saveName(name);
-        updateMeLabel();
-        closeNameModal();
-        updateComposerUI();
 
-        toast(`Joined as @${name}`, 'ok');
-
-        if (!state.gun) {
-          setupGun();
-        } else {
-          // Refresh presence
-          state.presence?.get(state.userId).put({ name: state.name, last: Date.now(), typing: false });
+        function joinChat() {
+            const nameInput = document.getElementById('nameInput');
+            const name = nameInput.value.trim();
+            
+            if (!name) {
+                nameInput.classList.add('border-red-500');
+                nameInput.placeholder = 'Please enter your name!';
+                return;
+            }
+            
+            userName = name;
+            users.add(userName);
+            
+            // Switch screens
+            document.getElementById('loginScreen').classList.add('hidden');
+            document.getElementById('chatScreen').classList.remove('hidden');
+            document.getElementById('currentUser').textContent = userName;
+            
+            // Add system message
+            addSystemMessage(`${userName} joined the chat! 👋`);
+            updateOnlineCount();
+            
+            // Focus on message input
+            document.getElementById('messageInput').focus();
+            
+            // Store in localStorage to simulate persistence
+            localStorage.setItem('chatUser', userName);
+            loadMessages();
         }
-      });
 
-      els.nameInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          els.saveNameBtn.click();
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const text = input.value.trim();
+            
+            if (!text) return;
+            
+            const message = {
+                id: Date.now(),
+                user: userName,
+                text: text,
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                color: getUserColor(userName)
+            };
+            
+            messages.push(message);
+            saveMessages();
+            displayMessage(message);
+            
+            input.value = '';
+            scrollToBottom();
         }
-      });
 
-      els.infoBtn.addEventListener('click', openAbout);
-      els.closeAboutBtn.addEventListener('click', closeAbout);
-      els.closeAboutBtn2.addEventListener('click', closeAbout);
-      els.aboutModal.addEventListener('click', (e) => {
-        if (e.target === els.aboutModal.firstElementChild) closeAbout();
-      });
-
-      const openChangeName = () => {
-        openNameModal(state.name || '');
-      };
-      els.changeNameBtn.addEventListener('click', openChangeName);
-      els.changeNameBtnMobile.addEventListener('click', openChangeName);
-
-      els.cameraBtn.addEventListener('click', () => {
-        toast('Camera UI coming soon (chat works now).', 'info');
-      });
-
-      els.messageInput.addEventListener('input', () => {
-        const raw = els.messageInput.value || '';
-        if (raw.length > MAX_CHARS) {
-          els.messageInput.value = raw.slice(0, MAX_CHARS);
+        function displayMessage(message, isSystem = false) {
+            const container = document.getElementById('messagesContainer');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message-bubble';
+            
+            if (isSystem) {
+                messageDiv.innerHTML = `
+                    <div class="text-center">
+                        <span class="bg-white bg-opacity-25 text-white text-sm px-4 py-2 rounded-full">
+                            ${message.text}
+                        </span>
+                    </div>
+                `;
+            } else {
+                const isOwnMessage = message.user === userName;
+                const alignClass = isOwnMessage ? 'justify-end' : 'justify-start';
+                const bgClass = isOwnMessage ? 'bg-purple-500 text-white' : 'bg-white text-gray-800';
+                
+                messageDiv.innerHTML = `
+                    <div class="flex ${alignClass} items-end gap-2">
+                        ${!isOwnMessage ? `
+                            <div class="${message.color} w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
+                                ${message.user.charAt(0).toUpperCase()}
+                            </div>
+                        ` : ''}
+                        <div class="max-w-xs lg:max-w-md">
+                            ${!isOwnMessage ? `<p class="text-xs text-white mb-1 ml-1 font-semibold">${message.user}</p>` : ''}
+                            <div class="${bgClass} rounded-2xl px-4 py-2 snap-shadow">
+                                <p class="break-words">${escapeHtml(message.text)}</p>
+                                <p class="text-xs mt-1 ${isOwnMessage ? 'text-purple-100' : 'text-gray-500'}">${message.timestamp}</p>
+                            </div>
+                        </div>
+                        ${isOwnMessage ? `
+                            <div class="${message.color} w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
+                                ${message.user.charAt(0).toUpperCase()}
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }
+            
+            container.appendChild(messageDiv);
+            scrollToBottom();
         }
-        autosizeTextarea();
-        updateComposerUI();
 
-        // typing indicator
-        const hasText = sanitizeText(els.messageInput.value || '').length > 0;
-        setTyping(hasText);
-        if (state.typeOffTimer) clearTimeout(state.typeOffTimer);
-        state.typeOffTimer = setTimeout(() => setTyping(false), 3200);
-      });
-
-      els.messageInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          sendMessage();
+        function addSystemMessage(text) {
+            const message = {
+                text: text,
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            };
+            displayMessage(message, true);
         }
-      });
 
-      els.sendBtn.addEventListener('click', sendMessage);
+        function handleTyping() {
+            // Clear existing timeout
+            clearTimeout(typingTimeout);
+            
+            // Show typing indicator for others (simulated)
+            typingTimeout = setTimeout(() => {
+                // Hide typing indicator
+            }, 1000);
+        }
 
-      // Close name modal by clicking backdrop
-      els.nameModal.addEventListener('click', (e) => {
-        const backdrop = els.nameModal.firstElementChild;
-        if (e.target === backdrop && state.name) closeNameModal();
-      });
+        function scrollToBottom() {
+            const container = document.getElementById('messagesContainer');
+            container.scrollTop = container.scrollHeight;
+        }
 
-      // Startup
-      updateMeLabel();
-      updateComposerUI();
-      autosizeTextarea();
+        function updateOnlineCount() {
+            const count = users.size;
+            const onlineCountElem = document.getElementById('onlineCount');
+            const onlineUsersElem = document.getElementById('onlineUsers');
+            
+            if (onlineCountElem) {
+                onlineCountElem.textContent = `${count} ${count === 1 ? 'person' : 'people'} online`;
+            }
+            if (onlineUsersElem) {
+                onlineUsersElem.textContent = `${count} ${count === 1 ? 'person' : 'people'} chatting`;
+            }
+        }
 
-      // If name exists, start immediately; otherwise prompt.
-      if (!state.name) {
-        openNameModal();
-      } else {
-        setupGun();
-        toast(`Welcome back, @${state.name}`, 'ok');
-      }
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
 
-      // Housekeeping: keep UI responsive when resizing.
-      window.addEventListener('resize', () => {
-        autosizeTextarea();
-      });
+        // LocalStorage functions for persistence
+        function saveMessages() {
+            localStorage.setItem('chatMessages', JSON.stringify(messages));
+        }
 
-      // Initial scroll
-      setTimeout(() => scrollToBottom('auto'), 80);
-    })();
-  </script>
+        function loadMessages() {
+            const saved = localStorage.getItem('chatMessages');
+            if (saved) {
+                messages = JSON.parse(saved);
+                // Only show last 50 messages
+                messages = messages.slice(-50);
+                messages.forEach(msg => displayMessage(msg));
+            }
+            
+            // Load users
+            const savedUsers = localStorage.getItem('chatUsers');
+            if (savedUsers) {
+                users = new Set(JSON.parse(savedUsers));
+            }
+            users.add(userName);
+            saveUsers();
+        }
+
+        function saveUsers() {
+            localStorage.setItem('chatUsers', JSON.stringify([...users]));
+        }
+
+        // Simulate real-time updates (in a real app, you'd use WebSockets)
+        setInterval(() => {
+            const saved = localStorage.getItem('chatMessages');
+            if (saved) {
+                const loadedMessages = JSON.parse(saved).slice(-50);
+                if (loadedMessages.length > messages.length) {
+                    const newMessages = loadedMessages.slice(messages.length);
+                    messages = loadedMessages;
+                    newMessages.forEach(msg => {
+                        if (msg.user !== userName) {
+                            displayMessage(msg);
+                        }
+                    });
+                }
+            }
+            
+            const savedUsers = localStorage.getItem('chatUsers');
+            if (savedUsers) {
+                users = new Set(JSON.parse(savedUsers));
+                updateOnlineCount();
+            }
+        }, 1000);
+
+        // Update online count periodically
+        setInterval(updateOnlineCount, 5000);
+        
+        // Initial update
+        updateOnlineCount();
+    </script>
 </body>
 </html>
